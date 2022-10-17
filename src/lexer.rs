@@ -103,10 +103,9 @@ impl Lexer {
     }
 
     fn run_parse(&mut self) {
-        self.skip_whitespaces();
-
         while self.can_next(0) {
             let tokenized = false // NOFORMAT
+                || self.skip_whitespaces()
                 || self.scan_pred(|c| c.is_numeric(), |num| Token::new(Tag::Integer, num))
                 || self.scan_seq("++", |_| Token::new_emp(Tag::PlusPlus))
                 || self.scan_seq("+", |_| Token::new_emp(Tag::Plus))
@@ -118,8 +117,6 @@ impl Lexer {
             if !tokenized {
                 break;
             }
-
-            self.skip_whitespaces();
         }
         if self.can_next(0) {
             panic!("Unexpected token at {}", self.cur_pos + 1);
@@ -128,9 +125,10 @@ impl Lexer {
         }
     }
 
-    fn skip_whitespaces(&mut self) {
+    fn skip_whitespaces(&mut self) -> bool {
         let len = self.peek_while(|c| c.is_whitespace());
         self.take(len);
+        false
     }
 
     fn scan_pred<P, F>(&mut self, pred: P, fact: F) -> bool
