@@ -20,15 +20,19 @@ pub enum Tag {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token {
     tag: Tag,
-    value: Vec<char>,
+    value: Option<Vec<char>>,
 }
 
 impl Token {
     fn new(tag: Tag, value: &[char]) -> Token {
         Token {
             tag,
-            value: value.to_vec(),
+            value: Some(value.to_vec()),
         }
+    }
+
+    fn new_emp(tag: Tag) -> Token {
+        Token { tag, value: None }
     }
 
     #[allow(dead_code)]
@@ -37,12 +41,8 @@ impl Token {
         Self::new(tag, &chars)
     }
 
-    #[allow(dead_code)]
     fn new_eof() -> Token {
-        Token {
-            tag: Tag::Eof,
-            value: Vec::new(),
-        }
+        Self::new_emp(Tag::Eof)
     }
 }
 
@@ -93,54 +93,80 @@ impl Lexer {
         i
     }
 
-    fn add_tok_and_take(&mut self, tag: Tag, len: usize) {
-        let value = &self.source_text[self.cur_pos..(self.cur_pos + len)];
-        let tok = Token::new(tag, value);
-
+    fn add_tok_and_take(&mut self, tok: Token, len: usize) {
         self.tokens.push(tok);
         self.take(len);
     }
 
-    fn run_parse(&mut self) {
-        while self.can_next(0) {
-            self.skip_whitespaces();
-            let lex = self.peek(0);
-            if lex.is_none() {
-                self.add_tok_and_take(Tag::Eof, 0);
-                return;
-            }
-            let lex = lex.expect("internal compiler error: EOF is not handled");
-            let (tag, len) = self.tok(lex);
-            self.add_tok_and_take(tag, len);
-        }
-        self.add_tok_and_take(Tag::Eof, 0);
+    fn add_eof_tok(&mut self) {
+        self.tokens.push(Token::new_eof());
     }
 
-    fn tok(&self, lex: char) -> (Tag, usize) {
-        // @todo Remove explicit length for non-value tokens.
+    fn run_parse(&mut self) {
+        self.skip_whitespaces();
 
-        match lex {
-            int if int.is_numeric() => {
-                let len = self.peek_while(|c| c.is_numeric());
-                (Tag::Integer, len)
+        while self.can_next(0) {
+            let tokenized = false // NOFORMAT
+                || self.scan_pred(|c| c.is_numeric(), |num| Token::new(Tag::Integer, num))
+                || self.scan_seq("++", |_| Token::new_emp(Tag::PlusPlus))
+                || self.scan_seq("+", |_| Token::new_emp(Tag::Plus))
+                || self.scan_seq("--", |_| Token::new_emp(Tag::MinusMinus))
+                || self.scan_seq("-", |_| Token::new_emp(Tag::Minus))
+                || self.scan_seq("*", |_| Token::new_emp(Tag::Asterisk))
+                || self.scan_seq("/", |_| Token::new_emp(Tag::Slash));
+
+            if !tokenized {
+                break;
             }
-            '+' => match self.peek(1) {
-                Some('+') => return (Tag::PlusPlus, 2),
-                _ => (Tag::Plus, 1),
-            },
-            '-' => match self.peek(1) {
-                Some('-') => return (Tag::MinusMinus, 2),
-                _ => (Tag::Minus, 1),
-            },
-            '*' => (Tag::Asterisk, 1),
-            '/' => (Tag::Slash, 1),
-            _ => panic!("Unexpected lexeme at {}", self.cur_pos + 1),
+
+            self.skip_whitespaces();
+        }
+        if self.can_next(0) {
+            panic!("Unexpected token at {}", self.cur_pos + 1);
+        } else {
+            self.add_eof_tok();
         }
     }
 
     fn skip_whitespaces(&mut self) {
         let len = self.peek_while(|c| c.is_whitespace());
         self.take(len);
+    }
+
+    fn scan_pred<P, F>(&mut self, pred: P, fact: F) -> bool
+    where
+        P: Fn(char) -> bool,
+        F: Fn(&[char]) -> Token,
+    {
+        let mut i = 0usize;
+        while self.peek(i).map_or(false, |c| pred(c)) {
+            i += 1;
+        }
+        let pos = self.cur_pos;
+        if i > 0 {
+            self.add_tok_and_take(fact(&self.source_text[pos..(pos + i)]), i);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn scan_seq<F>(&mut self, seq: &str, fact: F) -> bool
+    where
+        F: Fn(&str) -> Token,
+    {
+        if !self.can_next(seq.len()) {
+            return false;
+        }
+        let mut i = 0usize;
+        for s in seq.chars() {
+            if self.peek(i).map_or(false, |c| c != s) {
+                return false;
+            }
+            i += 1;
+        }
+        self.add_tok_and_take(fact(seq), i);
+        true
     }
 }
 
@@ -153,7 +179,7 @@ mod tests {
     }
 
     fn add_eof(mut toks: Vec<Token>) -> Vec<Token> {
-        toks.push(Token::new_str(Tag::Eof, ""));
+        toks.push(Token::new_eof());
         toks
     }
 
@@ -162,7 +188,8 @@ mod tests {
         let toks = Lexer::new(s("  ")).run();
 
         let exps = vec![Token::new_eof()];
-        assert!(toks == exps);
+
+        assert_eq!(toks, exps);
     }
 
     #[test]
@@ -170,7 +197,8 @@ mod tests {
         let toks = Lexer::new(s("  123 ")).run();
 
         let exps = add_eof(vec![Token::new_str(Tag::Integer, "123")]);
-        assert!(toks == exps);
+
+        assert_eq!(toks, exps);
     }
 
     #[test]
@@ -179,13 +207,13 @@ mod tests {
 
         let exps = add_eof(vec![
             Token::new_str(Tag::Integer, "2"),
-            Token::new_str(Tag::Plus, "+"),
+            Token::new_emp(Tag::Plus),
             Token::new_str(Tag::Integer, "2"),
-            Token::new_str(Tag::Asterisk, "*"),
+            Token::new_emp(Tag::Asterisk),
             Token::new_str(Tag::Integer, "2"),
         ]);
 
-        assert!(toks == exps);
+        assert_eq!(toks, exps);
     }
 
     #[test]
@@ -193,15 +221,15 @@ mod tests {
         let toks = Lexer::new(s("-2+++--1 ")).run();
 
         let exps = add_eof(vec![
-            Token::new_str(Tag::Minus, "-"),
+            Token::new_emp(Tag::Minus),
             Token::new_str(Tag::Integer, "2"),
-            Token::new_str(Tag::PlusPlus, "++"),
-            Token::new_str(Tag::Plus, "+"),
-            Token::new_str(Tag::MinusMinus, "--"),
+            Token::new_emp(Tag::PlusPlus),
+            Token::new_emp(Tag::Plus),
+            Token::new_emp(Tag::MinusMinus),
             Token::new_str(Tag::Integer, "1"),
         ]);
 
-        assert!(toks == exps);
+        assert_eq!(toks, exps);
     }
 
     #[test]
@@ -210,11 +238,11 @@ mod tests {
 
         let exps = add_eof(vec![
             Token::new_str(Tag::Integer, "10"),
-            Token::new_str(Tag::Asterisk, "*"),
-            Token::new_str(Tag::Slash, "/"),
+            Token::new_emp(Tag::Asterisk),
+            Token::new_emp(Tag::Slash),
             Token::new_str(Tag::Integer, "11"),
         ]);
 
-        assert!(toks == exps);
+        assert_eq!(toks, exps);
     }
 }
