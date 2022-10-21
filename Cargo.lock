@@ -3,5 +3,5 @@
 version = 3
 
 [[package]]
-name = "c-riscv-rs"
+name = "rrcc"
 version = "0.1.0"
