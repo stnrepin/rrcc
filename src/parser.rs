@@ -23,7 +23,7 @@ pub struct IntegerExpr {
 }
 
 impl IntegerExpr {
-    fn parse(ctx: &ParserContext) -> Box<IntegerExpr> {
+    fn parse(ctx: &mut ParserContext) -> Box<IntegerExpr> {
         let tok = ctx.peek();
         let radix = match tok.tag {
             Tag::Integer(r) => r,
@@ -54,9 +54,9 @@ pub enum PrimaryExpr {
 }
 
 impl PrimaryExpr {
-    fn parse(ctx: &ParserContext) -> PrimaryExpr {
+    fn parse(ctx: &mut ParserContext) -> PrimaryExpr {
         match ctx.peek_tag() {
-            Tag::Integer(_) => PrimaryExpr::Integer(IntegerExpr::parse(&ctx)),
+            Tag::Integer(_) => PrimaryExpr::Integer(IntegerExpr::parse(ctx)),
             _ => panic!("unexpected token"),
         }
     }
@@ -64,6 +64,7 @@ impl PrimaryExpr {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Operation {
+    None,
     Positive,
     Negative,
     Sum,
@@ -75,14 +76,34 @@ pub enum Operation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnaryExpr {
     op: Operation,
-    rhs: Expr,
+    rhs: PrimaryExpr,
 }
 
 impl UnaryExpr {
-    fn parse(ctx: &ParserContext) -> UnaryExpr {
-        UnaryExpr {
-            op: Operation::Positive,
-            rhs: Expr::parse(&ctx),
+    fn parse(ctx: &mut ParserContext) -> Option<Box<UnaryExpr>> {
+        let tag = ctx.peek_tag();
+        let op: Operation;
+        match tag {
+            Tag::Integer(_) => {
+                return Some(Box::new(UnaryExpr {
+                    op: Operation::None,
+                    rhs: PrimaryExpr::parse(ctx),
+                }))
+            }
+            Tag::Plus => op = Operation::Positive,
+            Tag::Minus => op = Operation::Negative,
+            _ => return None,
+        };
+        ctx.consume();
+        match UnaryExpr::parse(ctx) {
+            Some(mut e) => {
+                e.op = op;
+                Some(e)
+            }
+            None => panic!(
+                "unexpected token '{:?}' for unary expression",
+                ctx.peek_tag()
+            ),
         }
     }
 }
@@ -96,14 +117,16 @@ pub struct BinaryExpr {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
-    Primary(PrimaryExpr),
     Unary(Box<UnaryExpr>),
     Binary(Box<BinaryExpr>),
 }
 
 impl Expr {
-    fn parse(ctx: &ParserContext) -> Expr {
-        Expr::Primary(PrimaryExpr::parse(&ctx))
+    fn parse(ctx: &mut ParserContext) -> Expr {
+        match UnaryExpr::parse(ctx) {
+            Some(ue) => Expr::Unary(ue),
+            None => panic!("unexpected token in expression '{:?}'", ctx.peek_tag()),
+        }
     }
 }
 
@@ -161,9 +184,9 @@ impl Parser<'_> {
     }
 
     pub fn run(&self) -> Ast {
-        let ctx = ParserContext::new(&self.lexer);
+        let mut ctx = ParserContext::new(&self.lexer);
         Ast {
-            expr: Expr::parse(&ctx),
+            expr: Expr::parse(&mut ctx),
         }
     }
 }
@@ -181,11 +204,14 @@ mod test {
     }
 
     #[test]
-    fn test_primary_expr_integer_parsing() {
+    fn test_primary_expr_with_int() {
         fn unwrap_ast(a: &Ast) -> Vec<u8> {
             match a.expr.clone() {
-                Expr::Primary(prim_expr) => match prim_expr {
-                    PrimaryExpr::Integer(int) => int.value,
+                Expr::Unary(ue) => match ue.rhs {
+                    PrimaryExpr::Integer(int) => {
+                        assert_eq!(ue.op, Operation::None);
+                        int.value
+                    }
                 },
                 _ => panic!(),
             }
@@ -205,14 +231,33 @@ mod test {
     }
 
     #[test]
+    fn test_unary_minus_int() {
+        let ast = run_parser("-23");
+        let exp = Ast {
+            expr: Expr::Unary(Box::new(UnaryExpr {
+                op: Operation::Negative,
+                rhs: PrimaryExpr::Integer(Box::new(IntegerExpr {
+                    value: vec![2, 3],
+                    typpe: IntegerType::Int,
+                })),
+            })),
+        };
+        assert_eq!(ast, exp);
+    }
+
+    #[test]
     fn test_sum_int() {
-        let ast = run_parser("12+2");
+        let ast = run_parser("12+-2");
+
+        let lhs = run_parser("12").expr;
+        let rhs = run_parser("-2").expr;
 
         let exp = Ast {
-            expr: Expr::Primary(PrimaryExpr::Integer(Box::new(IntegerExpr {
-                value: Vec::new(),
-                typpe: IntegerType::Int,
-            }))),
+            expr: Expr::Binary(Box::new(BinaryExpr {
+                op: Operation::Sum,
+                lhs,
+                rhs,
+            })),
         };
 
         assert_eq!(ast, exp);
