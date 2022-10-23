@@ -34,6 +34,7 @@ impl IntegerExpr {
             value,
             typpe: IntegerType::Int,
         };
+        ctx.consume();
         Box::new(expr)
     }
 
@@ -115,6 +116,26 @@ pub struct BinaryExpr {
     rhs: Expr,
 }
 
+impl BinaryExpr {
+    fn parse(ctx: &mut ParserContext, lhs: Expr) -> Box<BinaryExpr> {
+        let op = match ctx.peek_tag() {
+            Tag::Plus => Operation::Sum,
+            Tag::Minus => Operation::Division,
+            Tag::Asterisk => Operation::Multiplication,
+            Tag::Slash => Operation::Division,
+            _ => panic!(
+                "unexpected operation token '{:?}' in binary expression",
+                ctx.peek_tag()
+            ),
+        };
+
+        ctx.consume();
+        let rhs = Expr::parse(ctx);
+
+        Box::new(BinaryExpr { op, lhs, rhs })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Unary(Box<UnaryExpr>),
@@ -123,10 +144,16 @@ pub enum Expr {
 
 impl Expr {
     fn parse(ctx: &mut ParserContext) -> Expr {
-        match UnaryExpr::parse(ctx) {
+        let lhs = match UnaryExpr::parse(ctx) {
             Some(ue) => Expr::Unary(ue),
-            None => panic!("unexpected token in expression '{:?}'", ctx.peek_tag()),
+            None => panic!("unexpected token '{:?}' in expression", ctx.peek_tag()),
+        };
+
+        if ctx.peek_tag() == Tag::Eof {
+            return lhs;
         }
+
+        Expr::Binary(BinaryExpr::parse(ctx, lhs))
     }
 }
 
@@ -150,7 +177,7 @@ impl<'a> ParserContext<'_> {
         P: Fn(Tag) -> bool,
     {
         let tok = self.peek();
-        if pred(tok.tag) {
+        if !pred(tok.tag) {
             panic!("Unexpected token {:?}", tok.tag);
         }
         tok
@@ -185,9 +212,11 @@ impl Parser<'_> {
 
     pub fn run(&self) -> Ast {
         let mut ctx = ParserContext::new(&self.lexer);
-        Ast {
+        let ast = Ast {
             expr: Expr::parse(&mut ctx),
-        }
+        };
+        ctx.peek_exp(Tag::Eof);
+        ast
     }
 }
 
@@ -257,6 +286,29 @@ mod test {
                 op: Operation::Sum,
                 lhs,
                 rhs,
+            })),
+        };
+
+        assert_eq!(ast, exp);
+    }
+
+    #[test]
+    fn teset_sum_and_mul() {
+        let ast = run_parser("2 + 3*4");
+
+        let t1 = run_parser("2").expr;
+        let t2 = run_parser("3").expr;
+        let t3 = run_parser("4").expr;
+
+        let exp = Ast {
+            expr: Expr::Binary(Box::new(BinaryExpr {
+                op: Operation::Sum,
+                lhs: t1,
+                rhs: Expr::Binary(Box::new(BinaryExpr {
+                    op: Operation::Multiplication,
+                    lhs: t2,
+                    rhs: t3,
+                })),
             })),
         };
 
